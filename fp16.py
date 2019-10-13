@@ -4,6 +4,10 @@
 #   https://pytorch.org/docs/stable/torchvision/models.html
 
 
+# bug,
+# [TensorRT] ERROR: ../rtSafe/cuda/caskConvolutionRunner.cpp (245) - Cask Error in checkCaskExecError<false>: 7 (Cask Convolution execution)
+# https://devtalk.nvidia.com/default/topic/1056268/tensorrt/tensorrt-do_inference-error/
+
 # use tensorrt to run resnet50
 
 import argparse
@@ -227,10 +231,13 @@ def main():
     print("size of Imagenet data is {}".format(len(imagenet_data)))
 
     args.batch_size = 1
+    args.num_workers = 0
     data_loader = torch.utils.data.DataLoader(
         imagenet_data,
         batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
+        # num_workers=args.workers,
+        num_workers=0,
+        pin_memory=True)
 
     test_images = data_files[0:3]
     plan_file = ModelData.MODEL_PATH + ".engine"
@@ -241,11 +248,6 @@ def main():
         # Contexts are used to perform inference.
         with engine.create_execution_context() as context:
             # Load a normalized test case into the host input page-locked buffer.
-            data_loader = torch.utils.data.DataLoader(
-                imagenet_data,
-                batch_size=args.batch_size, shuffle=False,
-                num_workers=args.workers, pin_memory=True)
-
             run(data_loader, engine)
 
             test_image = random.choice(test_images)
