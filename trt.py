@@ -44,11 +44,10 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
 parser.add_argument('--loop', '-l', default=100, type=int,
                     metavar='N', help='loop many batches before exit(default: 100)')
 
-
 # You can set the logger severity higher to suppress messages (or lower to display more messages).
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 # TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
-batch_size = 16
+
 image_size = 224
 
 
@@ -64,9 +63,9 @@ class ModelData(object):
 def allocate_buffers(engine):
     # Determine dimensions and create page-locked memory buffers (i.e. won't be swapped to disk) to hold host inputs/outputs.
     h_input = cuda.pagelocked_empty(trt.volume(
-        engine.get_binding_shape(0)), dtype=trt.nptype(ModelData.DTYPE))
+        engine.get_binding_shape(0)) * args.batch_size, dtype=trt.nptype(ModelData.DTYPE))
     h_output = cuda.pagelocked_empty(trt.volume(
-        engine.get_binding_shape(1)), dtype=trt.nptype(ModelData.DTYPE))
+        engine.get_binding_shape(1)) * args.batch_size, dtype=trt.nptype(ModelData.DTYPE))
     # Allocate device memory for inputs and outputs.
     d_input = cuda.mem_alloc(h_input.nbytes)
     d_output = cuda.mem_alloc(h_output.nbytes)
@@ -80,7 +79,7 @@ def do_inference(context, h_input, d_input, h_output, d_output, stream):
     cuda.memcpy_htod_async(d_input, h_input, stream)
     # Run inference.
     context.execute_async(bindings=[int(d_input), int(
-        d_output)], stream_handle=stream.handle)
+        d_output)], stream_handle=stream.handle, batch_size=args.batch_size)
     # Transfer predictions back from the GPU.
     cuda.memcpy_dtoh_async(h_output, d_output, stream)
     # Synchronize the stream
@@ -91,6 +90,7 @@ def do_inference(context, h_input, d_input, h_output, d_output, stream):
 def build_engine_onnx(model_file):
     with trt.Builder(TRT_LOGGER) as builder, builder.create_network() as network, trt.OnnxParser(network, TRT_LOGGER) as parser:
         builder.max_workspace_size = common.GiB(1)
+        builder.max_batch_size = args.batch_size
         # Load the Onnx model and parse it in order to populate the TensorRT network.
         with open(model_file, 'rb') as model:
             ok = parser.parse(model.read())
@@ -124,9 +124,9 @@ def load_normalized_test_case(test_image, pagelocked_buffer):
 
 
 # get the engine from onnx_path or plan_path
-# if plan file not exsits, create it
-def get_resnet50_engine(onnx_path, plan_path):
-    # if plan file exists, restore it
+# if plan file dose not exsits, create it
+def get_resnet50_engine(onnx_path):
+    plan_path = "resnet50-b{}".format(args.batch_size) + ".engine"
     # else create the engine and save it
     if not os.path.isfile(plan_path):
         engine = build_engine_onnx(ModelData.MODEL_PATH)
@@ -140,60 +140,24 @@ def get_resnet50_engine(onnx_path, plan_path):
 
 
 def run(data_loader, engine):
+    batch_time = AverageMeter()
     # Allocate buffers and create a CUDA stream.
     h_input, d_input, h_output, d_output, stream = allocate_buffers(engine)
     # Contexts are used to perform inference.
+    input = torch.rand((args.batch_size,) + ModelData.INPUT_SHAPE)
     with engine.create_execution_context() as context:
-        for i, (input, target) in enumerate(data_loader):
+        end = time.time()
+        for i in range(args.loop):
             np.copyto(h_input, input.reshape(-1))
             do_inference(context, h_input, d_input, h_output, d_output, stream)
-            print("h_output({})".format(h_output.shape), h_output[0:10])
-            print("sum of h_output = {}".format(h_output.sum()))
-
-
-def validate(val_loader, model):
-    batch_time = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
-
-    # switch to evaluate mode
-    model.eval()
-
-    end = time.time()
-    for i, (input, target) in enumerate(val_loader):
-        with torch.no_grad():
-            target = target.cuda(async=True)
-            # input_var = torch.autograd.Variable(input, volatile=True)
-            # target_var = torch.autograd.Variable(target, volatile=True)
-
-            # compute output
-            output = model(input.cuda(async=True))
-            # loss = criterion(output, target)
-
-            # measure accuracy and record loss
-            prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-            # losses.update(loss.data[0], input.size(0))
-            top1.update(prec1.item(), input.size(0))
-            top5.update(prec5.item(), input.size(0))
-
-            # measure elapsed time
-            batch_time.update(time.time() - end)
+            batch_time.update(time.time() - end, end)
             end = time.time()
 
+            # print("h_output({})".format(h_output.shape), h_output[0:10])
+            # print("sum of h_output = {}".format(h_output.sum()))
             if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                          i, len(val_loader), batch_time=batch_time,
-                          top1=top1, top5=top5))
-            if i == args.loop:
-                break
-
-    print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
-          .format(top1=top1, top5=top5))
-
-    return top1.avg
+                print('Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'.format(
+                    batch_time=batch_time))
 
 
 def main():
@@ -204,7 +168,7 @@ def main():
 
    # Set the data path to the directory that contains the trained models and test images for inference.
     _, data_files = common.find_sample_data(description="Runs a ResNet50 network with a TensorRT inference engine.", subfolder="resnet50", find_files=[
-                                            "binoculars.jpeg", "reflex_camera.jpeg", "tabby_tiger_cat.jpg", "class_labels.txt"])
+        "binoculars.jpeg", "reflex_camera.jpeg", "tabby_tiger_cat.jpg", "class_labels.txt"])
     labels_file = data_files[3]
     labels = open(labels_file, 'r').read().split('\n')
 
@@ -215,65 +179,35 @@ def main():
     # W are expected to be at least 224. The images have to be loaded in to a
     # range of [0, 1] and then normalized using mean = [0.485, 0.456, 0.406] and
     # std = [0.229, 0.224, 0.225]
-    normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # normalize = transforms.Normalize(
+    #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-    imagenet_data = datasets.ImageNet(
-        args.data, split='train', transform=transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ]),
-        download=False
-    )
+    # imagenet_data = datasets.ImageNet(
+    #     args.data, split='train', transform=transforms.Compose([
+    #         transforms.Resize(256),
+    #         transforms.CenterCrop(224),
+    #         transforms.ToTensor(),
+    #         normalize,
+    #     ]),
+    #     download=False
+    # )
 
-    print("size of Imagenet data is {}".format(len(imagenet_data)))
+    # print("size of Imagenet data is {}".format(len(imagenet_data)))
 
-    args.batch_size = 1
-    args.num_workers = 0
-    data_loader = torch.utils.data.DataLoader(
-        imagenet_data,
-        batch_size=args.batch_size, shuffle=False,
-        # num_workers=args.workers,
-        num_workers=0,
-        pin_memory=True)
+    # data_loader = torch.utils.data.DataLoader(
+    #     imagenet_data,
+    #     batch_size=args.batch_size, shuffle=False,
+    #     # num_workers=args.workers,
+    #     num_workers=0,
+    #     pin_memory=True)
 
-    test_images = data_files[0:3]
-    plan_file = ModelData.MODEL_PATH + ".engine"
-
-    with get_resnet50_engine(ModelData.MODEL_PATH, plan_file) as engine:
+    with get_resnet50_engine(ModelData.MODEL_PATH) as engine:
         # Allocate buffers and create a CUDA stream.
         h_input, d_input, h_output, d_output, stream = allocate_buffers(engine)
         # Contexts are used to perform inference.
         with engine.create_execution_context() as context:
             # Load a normalized test case into the host input page-locked buffer.
-            run(data_loader, engine)
-
-            test_image = random.choice(test_images)
-            test_case = load_normalized_test_case(test_image, h_input)
-            # Run the engine. The output will be a 1D tensor of length 1000, where each value represents the
-            # probability that the image corresponds to that label
-            do_inference(context, h_input, d_input, h_output, d_output, stream)
-            # We use the highest probability as our prediction. Its index corresponds to the predicted label.
-
-            pred = np.argmax(h_output)
-            # this one has an extra batch dim
-            reference_pred = resnet50(torch.tensor(
-                h_input).reshape((1,) + ModelData.INPUT_SHAPE))
-
-            # the resnet50 given by
-            print("h_output({})".format(h_output.shape), h_output[0:10])
-            print("sum of h_output = {}".format(h_output.sum()))
-            print("ref_pred({})".format(
-                reference_pred.shape), reference_pred[0][0:10])
-
-            pred = labels[np.argmax(h_output)]
-
-            if "_".join(pred.split()) in os.path.splitext(os.path.basename(test_case))[0]:
-                print("Correctly recognized " + test_case + " as " + pred)
-            else:
-                print("Incorrectly recognized " + test_case + " as " + pred)
+            run(0, engine)
 
     return
     # define loss function (criterion)
