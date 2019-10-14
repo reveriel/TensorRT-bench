@@ -30,6 +30,7 @@ import torchvision.models as models
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
+# pip install nvidia-ml-py3
 import nvidia_smi
 nvidia_smi.nvmlInit()
 handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)  # card 0
@@ -47,10 +48,12 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--loop', '-l', default=100, type=int,
                     metavar='N', help='loop many batches before exit(default: 100)')
-# parser.add_argument('-q', action=)
+parser.add_argument('-q', action='store_true',
+                    help="use int8 quantization")
 
 # You can set the logger severity higher to suppress messages (or lower to display more messages).
-TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+# TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+TRT_LOGGER = trt.Logger(trt.Logger.INTERNAL_ERROR)
 # TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
 
 image_size = 224
@@ -96,6 +99,7 @@ def build_engine_onnx(model_file):
     with trt.Builder(TRT_LOGGER) as builder, builder.create_network() as network, trt.OnnxParser(network, TRT_LOGGER) as parser:
         builder.max_workspace_size = common.GiB(1)
         builder.max_batch_size = args.batch_size
+
         # Load the Onnx model and parse it in order to populate the TensorRT network.
         with open(model_file, 'rb') as model:
             ok = parser.parse(model.read())
@@ -109,6 +113,24 @@ def build_engine_onnx(model_file):
                 print("  line: {}".format(error.line()))
                 print("  node: {}".format(error.node()))
                 exit(-1)
+
+        if args.q:
+           # enable int8 and set quantize (chenrong06)
+            # Incomplete version, please refer to workspace/tensorrt/samples/sampleINT8API/sampleINT8API.cpp
+            builder.int8_mode = True
+            builder.int8_calibrator = None
+            builder.strict_type_constraints = True
+            # print(network.num_layers)
+            for i in range(network.num_layers):
+                layer = network[i]
+                tensor = layer.get_output(0)
+                if tensor:
+                    tensor.set_dynamic_range(-1.0, 1.0)
+                tensor = layer.get_input(0)
+                if tensor:
+                    tensor.set_dynamic_range(-1.0, 1.0)
+            # print("pricision: int8")
+
         return builder.build_cuda_engine(network)
 
 
@@ -131,7 +153,8 @@ def load_normalized_test_case(test_image, pagelocked_buffer):
 # get the engine from onnx_path or plan_path
 # if plan file dose not exsits, create it
 def get_resnet50_engine(onnx_path):
-    plan_path = "resnet50-b{}".format(args.batch_size) + ".engine"
+    plan_path = "resnet50-b{}".format(args.batch_size) + \
+        ("q" if args.q else "") + ".engine"
     # else create the engine and save it
     if not os.path.isfile(plan_path):
         engine = build_engine_onnx(ModelData.MODEL_PATH)
