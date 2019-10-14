@@ -28,6 +28,13 @@ parser.add_argument('--loop', '-l', default=100, type=int,
                     metavar='N', help='loop many batches before exit(default: 100)')
 
 
+image_size = 224
+
+
+class ModelData(object):
+    INPUT_SHAPE = (3, image_size, image_size)
+
+
 def validate(val_loader, model):
     batch_time = AverageMeter()
     top1 = AverageMeter()
@@ -88,29 +95,32 @@ def main():
     # W are expected to be at least 224. The images have to be loaded in to a
     # range of [0, 1] and then normalized using mean = [0.485, 0.456, 0.406] and
     # std = [0.229, 0.224, 0.225]
-    normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    imagenet_data = datasets.ImageNet(
-        args.data, split='train', transform=transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ]),
-        download=False
-    )
 
-    print("size of Imagenet data is {}".format(len(imagenet_data)))
+    # normalize = transforms.Normalize(
+    #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # imagenet_data = datasets.ImageNet(
+    #     args.data, split='train', transform=transforms.Compose([
+    #         transforms.Resize(256),
+    #         transforms.CenterCrop(224),
+    #         transforms.ToTensor(),
+    #         normalize,
+    #     ]),
+    #     download=False
+    # )
 
-    data_loader = torch.utils.data.DataLoader(
-        imagenet_data,
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
+    # print("size of Imagenet data is {}".format(len(imagenet_data)))
+
+    # data_loader = torch.utils.data.DataLoader(
+    #     imagenet_data,
+    #     batch_size=args.batch_size, shuffle=False,
+    #     num_workers=args.workers, pin_memory=True)
 
     # define loss function (criterion)
     # criterion = nn.CrossEntropyLoss().cuda()
 
-    validate(data_loader, resnet50)
+    # validate(data_loader, resnet50)
+    run(resnet50)
+
     return
 
 
@@ -131,6 +141,22 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+
+def run(model):
+    batch_time = AverageMeter()
+    end = time.time()
+    input = torch.rand((args.batch_size,) + ModelData.INPUT_SHAPE)
+    with torch.no_grad():
+        for i in range(args.loop):
+            input_cuda = input.cuda(non_blocking=True)
+            model(input_cuda)
+            # torch.cuda.synchronize()
+            batch_time.update(time.time() - end, end)
+            end = time.time()
+            if i % args.print_freq == 0:
+                print('Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'.format(
+                    batch_time=batch_time))
 
 
 def accuracy(output, target, topk=(1,)):
