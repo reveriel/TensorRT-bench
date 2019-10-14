@@ -51,6 +51,8 @@ parser.add_argument('--loop', '-l', default=100, type=int,
 parser.add_argument('-q', action='store_true',
                     help="use int8 quantization")
 
+parser.add_argument('--csv', action='store_true', help="csv output")
+
 # You can set the logger severity higher to suppress messages (or lower to display more messages).
 # TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 TRT_LOGGER = trt.Logger(trt.Logger.INTERNAL_ERROR)
@@ -189,24 +191,30 @@ def run(data_loader, engine):
             mem_info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
             gpu_mem.update(mem_info.used >> 20)
 
-            if i % args.print_freq == 0:
+            if i % args.print_freq == 0 and not args.csv:
                 print('[{}/{}] batch time {batch_time.val:.3f} s (avg:{batch_time.avg:.3f})'.format(
                     i, args.loop, batch_time=batch_time))
     # print summary
-    print("batchsize: {} ".format(args.batch_size))
-    print("throughput: {:.3f} img/sec".format(args.loop *
-                                              args.batch_size / batch_time.sum))
-    print("Latency: {:.3f} sec".format(batch_time.avg))
-    # see https://forums.fast.ai/t/show-gpu-utilization-metrics-inside-training-loop-without-subprocess-call/26594
-    # show gpu utilization metrics inside trianing loop
-    print("GPU util: {:.3f} %, GPU mem: {} MiB".format(gpu.avg, gpu_mem.avg))
+    if args.csv:
+        print("{}, {:.3f}, {:.3f}, {:.3f}, {}".format(
+            args.batch_size,
+            args.loop * args.batch_size / batch_time.sum,
+            batch_time.avg,
+            gpu.avg, gpu_mem.avg))
+    else:
+        print("batchsize: {} ".format(args.batch_size))
+        print("throughput: {:.3f} img/sec".format(args.loop *
+                                                  args.batch_size / batch_time.sum))
+        print("Latency: {:.3f} sec".format(batch_time.avg))
+        # see https://forums.fast.ai/t/show-gpu-utilization-metrics-inside-training-loop-without-subprocess-call/26594
+        # show gpu utilization metrics inside trianing loop
+        print("GPU util: {:.3f} %, GPU mem: {} MiB".format(
+            gpu.avg, gpu_mem.avg))
 
 
 def main():
     global args
     args = parser.parse_args()
-
-    resnet50 = models.resnet50(pretrained=True)
 
    # Set the data path to the directory that contains the trained models and test images for inference.
     _, data_files = common.find_sample_data(description="Runs a ResNet50 network with a TensorRT inference engine.", subfolder="resnet50", find_files=[

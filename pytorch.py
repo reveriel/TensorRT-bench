@@ -32,6 +32,8 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
 parser.add_argument('--loop', '-l', default=100, type=int,
                     metavar='N', help='loop many batches before exit(default: 100)')
 
+parser.add_argument('--csv', action='store_true', help="csv output")
+parser.add_argument('--jit', action='store_true', help="csv output")
 
 image_size = 224
 
@@ -89,8 +91,17 @@ def main():
     global args
     args = parser.parse_args()
 
-    # load model
-    resnet50 = models.resnet50(pretrained=True)
+    # load model,
+    if args.jit:
+        # fail torch.jit.script failed. https://github.com/pytorch/pytorch/issues/25154
+        # resnet50 = torch.jit.script(models.resnet50(pretrained=True))
+        dummpy_input = torch.rand((args.batch_size,) + ModelData.INPUT_SHAPE)
+        resnet50 = torch.jit.trace(
+            models.resnet50(pretrained=True), dummpy_input)
+
+    else:
+        resnet50 = models.resnet50(pretrained=True)
+
     resnet50.cuda()
 
     # data loading
@@ -149,6 +160,7 @@ class AverageMeter(object):
 
 
 def run(model):
+
     batch_time = AverageMeter()
     gpu = AverageMeter()
     gpu_mem = AverageMeter()
@@ -168,17 +180,25 @@ def run(model):
             mem_info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
             gpu_mem.update(mem_info.used >> 20)
 
-            if i % args.print_freq == 0:
+            if i % args.print_freq == 0 and not args.csv:
                 print('[{}/{}] batch time {batch_time.val:.3f} s (avg: {batch_time.avg:.3f})'.format(
                     i, args.loop, batch_time=batch_time))
     # print summary
-    print("batchsize: {} ".format(args.batch_size))
-    print("throughput: {:.3f} img/sec".format(args.loop *
-                                              args.batch_size / batch_time.sum))
-    print("Latency: {:.3f} sec".format(batch_time.avg))
-    # see https://forums.fast.ai/t/show-gpu-utilization-metrics-inside-training-loop-without-subprocess-call/26594
-    # show gpu utilization metrics inside trianing loop
-    print("GPU util: {:.3f} %, GPU mem: {} MiB".format(gpu.avg, gpu_mem.avg))
+    if args.csv:
+        print("{}, {:.3f}, {:.3f}, {:.3f}, {}".format(
+            args.batch_size,
+            args.loop * args.batch_size / batch_time.sum,
+            batch_time.avg,
+            gpu.avg, gpu_mem.avg))
+    else:
+        print("batchsize: {} ".format(args.batch_size))
+        print("throughput: {:.3f} img/sec".format(args.loop *
+                                                  args.batch_size / batch_time.sum))
+        print("Latency: {:.3f} sec".format(batch_time.avg))
+        # see https://forums.fast.ai/t/show-gpu-utilization-metrics-inside-training-loop-without-subprocess-call/26594
+        # show gpu utilization metrics inside trianing loop
+        print("GPU util: {:.3f} %, GPU mem: {} MiB".format(
+            gpu.avg, gpu_mem.avg))
 
 
 def accuracy(output, target, topk=(1,)):
