@@ -167,9 +167,9 @@ def run(data_loader, engine):
             gpu_mem.update(mem_info.used >> 20)
 
             if i % args.print_freq == 0:
-                print('[{}/{}] Time {batch_time.val:.3f} ({batch_time.avg:.3f})'.format(
+                print('[{}/{}] batch time {batch_time.val:.3f} s (avg:{batch_time.avg:.3f})'.format(
                     i, args.loop, batch_time=batch_time))
-
+    # print summary
     print("batchsize: {} ".format(args.batch_size))
     print("throughput: {:.3f} img/sec".format(args.loop *
                                               args.batch_size / batch_time.sum))

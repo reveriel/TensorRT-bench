@@ -14,6 +14,11 @@ import torchvision.models as models
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
+import nvidia_smi
+nvidia_smi.nvmlInit()
+handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)  # card 0
+
+
 parser = argparse.ArgumentParser(description='Pytorch Resnet50')
 parser.add_argument('--data', metavar='DIR',
                     help='path to the image net dataset',
@@ -145,18 +150,35 @@ class AverageMeter(object):
 
 def run(model):
     batch_time = AverageMeter()
-    end = time.time()
+    gpu = AverageMeter()
+    gpu_mem = AverageMeter()
     input = torch.rand((args.batch_size,) + ModelData.INPUT_SHAPE)
     with torch.no_grad():
+        end = time.time()
         for i in range(args.loop):
             input_cuda = input.cuda(non_blocking=True)
             model(input_cuda)
-            # torch.cuda.synchronize()
-            batch_time.update(time.time() - end, end)
+            torch.cuda.synchronize()
+            batch_time.update(time.time() - end)
             end = time.time()
+            # https://pypi.org/project/py3nvml/
+            util_rate = nvidia_smi.nvmlDeviceGetUtilizationRates(handle)
+            # print(util_rate.gpu, util_rate.memory)
+            gpu.update(util_rate.gpu)
+            mem_info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+            gpu_mem.update(mem_info.used >> 20)
+
             if i % args.print_freq == 0:
-                print('Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'.format(
-                    batch_time=batch_time))
+                print('[{}/{}] batch time {batch_time.val:.3f} s (avg: {batch_time.avg:.3f})'.format(
+                    i, args.loop, batch_time=batch_time))
+    # print summary
+    print("batchsize: {} ".format(args.batch_size))
+    print("throughput: {:.3f} img/sec".format(args.loop *
+                                              args.batch_size / batch_time.sum))
+    print("Latency: {:.3f} sec".format(batch_time.avg))
+    # see https://forums.fast.ai/t/show-gpu-utilization-metrics-inside-training-loop-without-subprocess-call/26594
+    # show gpu utilization metrics inside trianing loop
+    print("GPU util: {:.3f} %, GPU mem: {} MiB".format(gpu.avg, gpu_mem.avg))
 
 
 def accuracy(output, target, topk=(1,)):
