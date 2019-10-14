@@ -30,6 +30,10 @@ import torchvision.models as models
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
+import nvidia_smi
+nvidia_smi.nvmlInit()
+handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)  # card 0
+
 
 parser = argparse.ArgumentParser(description='Pytorch Resnet50')
 parser.add_argument('--data', metavar='DIR',
@@ -43,6 +47,7 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--loop', '-l', default=100, type=int,
                     metavar='N', help='loop many batches before exit(default: 100)')
+# parser.add_argument('-q', action=)
 
 # You can set the logger severity higher to suppress messages (or lower to display more messages).
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
@@ -141,6 +146,8 @@ def get_resnet50_engine(onnx_path):
 
 def run(data_loader, engine):
     batch_time = AverageMeter()
+    gpu = AverageMeter()
+    gpu_mem = AverageMeter()
     # Allocate buffers and create a CUDA stream.
     h_input, d_input, h_output, d_output, stream = allocate_buffers(engine)
     # Contexts are used to perform inference.
@@ -150,14 +157,26 @@ def run(data_loader, engine):
         for i in range(args.loop):
             np.copyto(h_input, input.reshape(-1))
             do_inference(context, h_input, d_input, h_output, d_output, stream)
-            batch_time.update(time.time() - end, end)
+            batch_time.update(time.time() - end)
             end = time.time()
+            # https://pypi.org/project/py3nvml/
+            util_rate = nvidia_smi.nvmlDeviceGetUtilizationRates(handle)
+            # print(util_rate.gpu, util_rate.memory)
+            gpu.update(util_rate.gpu)
+            mem_info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+            gpu_mem.update(mem_info.used >> 20)
 
-            # print("h_output({})".format(h_output.shape), h_output[0:10])
-            # print("sum of h_output = {}".format(h_output.sum()))
             if i % args.print_freq == 0:
-                print('Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'.format(
-                    batch_time=batch_time))
+                print('[{}/{}] Time {batch_time.val:.3f} ({batch_time.avg:.3f})'.format(
+                    i, args.loop, batch_time=batch_time))
+
+    print("batchsize: {} ".format(args.batch_size))
+    print("throughput: {:.3f} img/sec".format(args.loop *
+                                              args.batch_size / batch_time.sum))
+    print("Latency: {:.3f} sec".format(batch_time.avg))
+    # see https://forums.fast.ai/t/show-gpu-utilization-metrics-inside-training-loop-without-subprocess-call/26594
+    # show gpu utilization metrics inside trianing loop
+    print("GPU util: {:.3f} %, GPU mem: {} MiB".format(gpu.avg, gpu_mem.avg))
 
 
 def main():
