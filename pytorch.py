@@ -14,6 +14,7 @@ import torchvision.models as models
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
+# pip install nvidia-ml-py3
 import nvidia_smi
 nvidia_smi.nvmlInit()
 handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)  # card 0

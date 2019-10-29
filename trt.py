@@ -177,10 +177,16 @@ def run(data_loader, engine):
     h_input, d_input, h_output, d_output, stream = allocate_buffers(engine)
     # Contexts are used to perform inference.
     input = torch.rand((args.batch_size,) + ModelData.INPUT_SHAPE)
+    # if data_loader != 0:
+
     with engine.create_execution_context() as context:
         end = time.time()
-        for i in range(args.loop):
+        # for i in range(args.loop):
+        for i, (input, target) in enumerate(data_loader):
+            if i == args.loop:
+                break
             np.copyto(h_input, input.reshape(-1))
+
             do_inference(context, h_input, d_input, h_output, d_output, stream)
             batch_time.update(time.time() - end)
             end = time.time()
@@ -190,6 +196,11 @@ def run(data_loader, engine):
             gpu.update(util_rate.gpu)
             mem_info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
             gpu_mem.update(mem_info.used >> 20)
+
+            print("predict:", h_output)
+            print("predict: ", h_output.shape)
+            print("target:", target)
+            print("target:", target.shape)
 
             if i % args.print_freq == 0 and not args.csv:
                 print('[{}/{}] batch time {batch_time.val:.3f} s (avg:{batch_time.avg:.3f})'.format(
@@ -229,27 +240,27 @@ def main():
     # W are expected to be at least 224. The images have to be loaded in to a
     # range of [0, 1] and then normalized using mean = [0.485, 0.456, 0.406] and
     # std = [0.229, 0.224, 0.225]
-    # normalize = transforms.Normalize(
-    #     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-    # imagenet_data = datasets.ImageNet(
-    #     args.data, split='train', transform=transforms.Compose([
-    #         transforms.Resize(256),
-    #         transforms.CenterCrop(224),
-    #         transforms.ToTensor(),
-    #         normalize,
-    #     ]),
-    #     download=False
-    # )
+    imagenet_data = datasets.ImageNet(
+        args.data, split='train', transform=transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+        ]),
+        download=False
+    )
 
     # print("size of Imagenet data is {}".format(len(imagenet_data)))
 
-    # data_loader = torch.utils.data.DataLoader(
-    #     imagenet_data,
-    #     batch_size=args.batch_size, shuffle=False,
-    #     # num_workers=args.workers,
-    #     num_workers=0,
-    #     pin_memory=True)
+    data_loader = torch.utils.data.DataLoader(
+        imagenet_data,
+        batch_size=args.batch_size, shuffle=False,
+        # num_workers=args.workers,
+        num_workers=0,
+        pin_memory=True)
 
     with get_resnet50_engine(ModelData.MODEL_PATH) as engine:
         # Allocate buffers and create a CUDA stream.
@@ -257,13 +268,15 @@ def main():
         # Contexts are used to perform inference.
         with engine.create_execution_context() as context:
             # Load a normalized test case into the host input page-locked buffer.
-            run(0, engine)
+            run(data_loader, engine)
+            # run(0, engine)
 
-    return
+    # return
     # define loss function (criterion)
     # criterion = nn.CrossEntropyLoss().cuda()
 
-    validate(data_loader, resnet50)
+    # validate(data_loader, resnet50)
+
     return
 
 
